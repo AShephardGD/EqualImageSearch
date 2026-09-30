@@ -3,9 +3,15 @@
 #include <filesystem>
 #include <vector>
 #include <string>
+#include <fstream> // ОБЯЗАТЕЛЬНО: для чтения файлов с диска
 #include <windows.h> 
 
 namespace fs = std::filesystem;
+
+struct ImageData {
+    fs::path path;
+    cv::Mat hist;
+};
 
 // Функция для вычисления гистограммы изображения
 cv::Mat calculateHistogram(const cv::Mat& image) {
@@ -22,83 +28,126 @@ cv::Mat calculateHistogram(const cv::Mat& image) {
     return hist;
 }
 
-// Функция для сравнения двух изображений
-double compareImages(const cv::Mat& img1, const cv::Mat& img2) {
-    cv::Mat hist1 = calculateHistogram(img1);
-    cv::Mat hist2 = calculateHistogram(img2);
-    return cv::compareHist(hist1, hist2, cv::HISTCMP_CORREL);
+// Функция для надежной конвертации wstring в правильный UTF-8 string без скрытого мусора
+std::string WStringToUTF8(const std::wstring& wstr) {
+    if (wstr.empty()) return std::string();
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
+    std::string strTo(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], size_needed, NULL, NULL);
+    return strTo;
+}
+
+// РЕШЕНИЕ ПРОБЛЕМЫ: Безопасное чтение изображения с кириллицей в пути через std::ifstream
+cv::Mat imread_unicode(const fs::path& path) {
+    // В Windows std::ifstream нативно поддерживает fs::path с любыми русскими буквами
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) return cv::Mat();
+
+    std::streamsize size = file.tellg();
+    file.seekg(0, std::ios::beg);
+
+    std::vector<char> buffer(size);
+    if (!file.read(buffer.data(), size)) return cv::Mat();
+
+    // Декодируем изображение из буфера памяти (OpenCV это делает без привязки к путям файловой системы)
+    return cv::imdecode(cv::Mat(buffer), cv::IMREAD_COLOR);
+}
+
+// Вспомогательная функция для безопасного вывода пути в std::cout
+std::string path_to_utf8_string(const fs::path& p) {
+    std::wstring w = p.wstring();
+    return WStringToUTF8(w);
+}
+
+void returnOldConsoleCodePage(uint oldInputCP, uint oldOutputCP) {
+    // Восстанавливаем старую кодовую страницу консоли
+    SetConsoleOutputCP(oldOutputCP);
+    SetConsoleCP(oldInputCP);
 }
 
 int main() {
+    uint oldInputCP = GetConsoleCP();
+    uint oldOutputCP = GetConsoleOutputCP();
     // Включаем UTF-8 для вывода текста в консоли Windows
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 
-    std::vector<fs::path> imagePaths;
+    std::vector<fs::path> rawPaths;
+    std::vector<ImageData> processedImages;
 
-    // Используем обычный cout — в UTF-8 режиме он выведет русский текст без кракозябр
     std::cout << "Введите путь к папке с изображениями: ";
 
-    // Безопасное чтение широких символов (кириллицы) прямо из буфера консоли Windows
-    // Это единственный способ, который PowerShell не сможет испортить или обрезать
     wchar_t wBuffer[MAX_PATH];
     DWORD charsRead = 0;
     HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
     ReadConsoleW(hInput, wBuffer, MAX_PATH, &charsRead, NULL);
-    // Удаляем символы переноса строки (\r\n) в конце
+
     std::wstring wPath(wBuffer, charsRead);
+    
     while (!wPath.empty() && (wPath.back() == L'\r' || wPath.back() == L'\n')) {
         wPath.pop_back();
     }
-
-    // Создаем объект пути из широкой строки
-    fs::path folderPathObj(wPath);
-    // 1. Создаем строку из буфера
-    std::wstring wPath(wBuffer, charsRead);
     
-    // .string() вернет путь в UTF-8, который cout теперь отлично напечатает
-    std::cout << "Путь к папке: " << folderPathObj.string() << std::endl;
+    std::string utf8Path = WStringToUTF8(wPath);
+    fs::path folderPathObj = fs::u8path(utf8Path);
+    folderPathObj = folderPathObj.lexically_normal();
+    
+    std::cout << "Путь к папке: " << path_to_utf8_string(folderPathObj) << std::endl;
 
-    // Проверяем, существует ли папка
     if (!fs::exists(folderPathObj) || !fs::is_directory(folderPathObj)) {
         std::cerr << "Ошибка: Указанная папка не существует или это не папка." << std::endl;
         std::cin.get();
+        returnOldConsoleCodePage(oldInputCP, oldOutputCP);
         return 1;
     }
 
-    // Считываем все файлы из папки
     for (const auto& entry : fs::directory_iterator(folderPathObj)) {
         if (entry.is_regular_file() && (entry.path().extension() == ".jpg" || entry.path().extension() == ".png")) {
-            imagePaths.push_back(entry.path()); 
+            rawPaths.push_back(entry.path().lexically_normal()); 
         }
     }
-    std::cout << imagePaths.size() << " изображений найдено в папке." << std::endl;
+    std::cout << rawPaths.size() << " изображений найдено в папке. Началась загрузка картинок..." << std::endl;
 
-    // Сравниваем изображения
-    for (size_t i = 0; i < imagePaths.size(); ++i) {
-        std::cout << "Обрабатывается изображение: " << imagePaths[i].string() << std::endl;
+    for (size_t i = 0; i < rawPaths.size(); ++i) {
+        //std::cout << "Обрабатывается изображение: " << path_to_utf8_string(rawPaths[i]) << std::endl;
+        if (i % 100 == 0) std::cout << "Обработано изображений: " << i << " из " << rawPaths.size() << std::endl;
+
+        // ИСПРАВЛЕНИЕ: Читаем файл через буфер памяти вместо cv::imread
+        cv::Mat img = imread_unicode(rawPaths[i]);
         
-        // В Windows cv::imread принимает строку. Чтобы кириллица открылась, 
-        // библиотека OpenCV должна получить путь в системной кодировке.
-        // Метод .string() в Windows-версии std::filesystem автоматически сделает нужную конвертацию.
-        cv::Mat img1 = cv::imread(imagePaths[i].string());
-        if (img1.empty()) {
+        if (img.empty()) {
             std::cout << "Не удалось открыть файл (возможно поврежден)." << std::endl;
             continue;
         }
 
-        for (size_t j = i + 1; j < imagePaths.size(); ++j) {
-            cv::Mat img2 = cv::imread(imagePaths[j].string());
-            if (img2.empty()) continue;
+        ImageData data;
+        data.path = rawPaths[i];
+        data.hist = calculateHistogram(img);
+        processedImages.push_back(data);
+    }
 
-            double similarity = compareImages(img1, img2);
-            if (similarity > 0.9) { // Порог похожести
-                std::cout << "Похожие изображения: " << imagePaths[i].string() << " и " << imagePaths[j].string() << std::endl;
+    std::cout << "\nВсе гистограммы в памяти. Начинаем мгновенное сравнение..." << std::endl;
+
+    long long totalComparisons = 0;
+    long long similarImagesCount = 0;
+    for (size_t i = 0; i < processedImages.size(); ++i) {
+        for (size_t j = i + 1; j < processedImages.size(); ++j) {
+            totalComparisons++;
+            double similarity = cv::compareHist(processedImages[i].hist, processedImages[j].hist, cv::HISTCMP_CORREL);
+            if (similarity > 0.989182) { 
+                std::cout << "Похожие изображения: " << path_to_utf8_string(processedImages[i].path) 
+                << " и " << path_to_utf8_string(processedImages[j].path) << " с коэффициентом: " << similarity << std::endl;
+                similarImagesCount++;
             }
         }
     }
 
+    std::cout << "Проверка завершена! Всего выполнено сравнений: " << totalComparisons << std::endl;
+    std::cout << "Проверка завершена! Всего похожих картинок: " << similarImagesCount << std::endl;
     std::cout << "Нажмите Enter для выхода..." << std::endl;
+    
+    FlushConsoleInputBuffer(hInput);
     std::cin.get();
+    returnOldConsoleCodePage(oldInputCP, oldOutputCP);
     return 0;
 }
