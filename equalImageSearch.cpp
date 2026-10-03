@@ -1,10 +1,15 @@
-#include "opencv/build/include/opencv.hpp"
 #include <iostream>
 #include <filesystem>
 #include <vector>
 #include <string>
 #include <fstream> // ОБЯЗАТЕЛЬНО: для чтения файлов с диска
-#include <windows.h> 
+#include <windows.h>
+
+#include "opencv/build/include/opencv.hpp"
+#include "opencv/build/include/opencv2/features2d.hpp"
+#include "opencv/build/include/opencv2/highgui.hpp"
+#include "opencv/build/include/opencv2/imgproc.hpp"
+#include "opencv/build/include/opencv2/calib3d.hpp"
 
 namespace fs = std::filesystem;
 
@@ -65,6 +70,55 @@ void returnOldConsoleCodePage(uint oldInputCP, uint oldOutputCP) {
     SetConsoleCP(oldInputCP);
 }
 
+// Функция для сравнения изображений с использованием ORB
+double compareImagesORB(const cv::Mat& img1, const cv::Mat& img2) {
+    cv::Ptr<cv::ORB> orb = cv::ORB::create();
+    std::vector<cv::KeyPoint> keypoints1, keypoints2;
+    cv::Mat descriptors1, descriptors2;
+
+    // Найти ключевые точки и дескрипторы для обоих изображений
+    orb->detectAndCompute(img1, cv::Mat(), keypoints1, descriptors1);
+    orb->detectAndCompute(img2, cv::Mat(), keypoints2, descriptors2);
+
+    // Сопоставить дескрипторы с помощью BFMatcher
+    cv::BFMatcher matcher(cv::NORM_HAMMING, true);
+    std::vector<cv::DMatch> matches;
+    matcher.match(descriptors1, descriptors2, matches);
+
+    // Рассчитать среднее расстояние между совпадениями
+    double totalDistance = 0;
+    for (const auto& match : matches) {
+        totalDistance += match.distance;
+    }
+    return totalDistance / matches.size(); // Чем меньше значение, тем больше схожесть
+}
+
+void compareImages(const ImageData& img1, const ImageData& img2, long long& similarImagesCount, double histCoeff, double eqCoeff) {
+    // Сравнение гистограмм
+    double histSimilarity = compareHist(img1.hist, img2.hist, cv::HISTCMP_CORREL);
+    // Если гистограммы схожи, используем ORB для уточнения
+    if (histSimilarity > histCoeff) {
+        cv::Mat img1Mat = imread_unicode(img1.path);
+        cv::Mat img2Mat = imread_unicode(img2.path);
+
+        if (img1Mat.empty()) {
+            std::cout << "Не удалось открыть изображение для ORB сравнения: " << img1.path << std::endl;
+            return;
+        }
+        if (img2Mat.empty()) {
+            std::cout << "Не удалось открыть изображение для ORB сравнения: " << img2.path << std::endl;
+            return;
+        }
+        double equality = 1.0 / (1.0 + compareImagesORB(img1Mat, img2Mat)); // Чем меньше расстояние, тем больше схожесть
+        if (equality > eqCoeff) {
+            std::cout << "Похожие изображения: " << path_to_utf8_string(img1.path) << " и " << path_to_utf8_string(img2.path)
+                      << " с коэффициентом гистограммы: " << histSimilarity
+                      << " и с коэффициентом похожести: " << equality << std::endl;
+            similarImagesCount++;
+        }
+    }
+}
+
 int main() {
     uint oldInputCP = GetConsoleCP();
     uint oldOutputCP = GetConsoleOutputCP();
@@ -74,6 +128,7 @@ int main() {
 
     std::vector<fs::path> rawPaths;
     std::vector<ImageData> processedImages;
+    
 
     std::cout << "Введите путь к папке с изображениями: ";
 
@@ -109,7 +164,6 @@ int main() {
     std::cout << rawPaths.size() << " изображений найдено в папке. Началась загрузка картинок..." << std::endl;
 
     for (size_t i = 0; i < rawPaths.size(); ++i) {
-        //std::cout << "Обрабатывается изображение: " << path_to_utf8_string(rawPaths[i]) << std::endl;
         if (i % 100 == 0) std::cout << "Обработано изображений: " << i << " из " << rawPaths.size() << std::endl;
 
         // ИСПРАВЛЕНИЕ: Читаем файл через буфер памяти вместо cv::imread
@@ -128,24 +182,37 @@ int main() {
 
     std::cout << "\nВсе гистограммы в памяти. Начинаем мгновенное сравнение..." << std::endl;
 
-    long long totalComparisons = 0;
-    long long similarImagesCount = 0;
-    for (size_t i = 0; i < processedImages.size(); ++i) {
-        for (size_t j = i + 1; j < processedImages.size(); ++j) {
-            totalComparisons++;
-            double similarity = cv::compareHist(processedImages[i].hist, processedImages[j].hist, cv::HISTCMP_CORREL);
-            if (similarity > 0.989182) { 
-                std::cout << "Похожие изображения: " << path_to_utf8_string(processedImages[i].path) 
-                << " и " << path_to_utf8_string(processedImages[j].path) << " с коэффициентом: " << similarity << std::endl;
-                similarImagesCount++;
+    double histCoeff, eqCoeff; // 0.9 0.02
+    std::cout << "Введите коэффициент гистограммы (0.0 - 1.0) или 0 для выхода: ";
+    std::cin >> histCoeff;
+    std::cout << "Введите коэффициент похожести (0.0 - 1.0) или 0 для выхода: ";
+    std::cin >> eqCoeff;
+    while (histCoeff || eqCoeff) {
+        long long totalComparisons = 0;
+        long long similarImagesCount = 0;
+        for (size_t i = 0; i < processedImages.size(); ++i) {
+            if (i % 100 == 0) std::cout << "Обработано изображений: " << i << " из " << processedImages.size() << std::endl;
+            for (size_t j = i + 1; j < processedImages.size(); ++j) {
+                totalComparisons++;
+                compareImages(processedImages[i], processedImages[j], similarImagesCount, histCoeff, eqCoeff);
+                // double similarity = cv::compareHist(processedImages[i].hist, processedImages[j].hist, cv::HISTCMP_CORREL);
+                // if (similarity > 0.989182) { 
+                //     std::cout << "Похожие изображения: " << path_to_utf8_string(processedImages[i].path) 
+                //     << " и " << path_to_utf8_string(processedImages[j].path) << " с коэффициентом: " << similarity << std::endl;
+                //     similarImagesCount++;
+                // }
             }
         }
+        std::cout << "Проверка завершена! Всего выполнено сравнений: " << totalComparisons << std::endl;
+        std::cout << "Проверка завершена! Всего похожих картинок: " << similarImagesCount << std::endl;
+        std::cout << "Введите коэффициент гистограммы (0.0 - 1.0) или 0 для выхода: ";
+        std::cin >> histCoeff;
+        std::cout << "Введите коэффициент похожести (0.0 - 1.0) или 0 для выхода: ";
+        std::cin >> eqCoeff;
     }
 
-    std::cout << "Проверка завершена! Всего выполнено сравнений: " << totalComparisons << std::endl;
-    std::cout << "Проверка завершена! Всего похожих картинок: " << similarImagesCount << std::endl;
-    std::cout << "Нажмите Enter для выхода..." << std::endl;
     
+    std::cout << "Нажмите Enter для выхода..." << std::endl;
     FlushConsoleInputBuffer(hInput);
     std::cin.get();
     returnOldConsoleCodePage(oldInputCP, oldOutputCP);
