@@ -1,0 +1,6 @@
+histCoeff=0.9
+eqCoeff=0.02
+showPairs=false
+pairsOutput=file
+dir=./
+outputFile=./output/output.txt
