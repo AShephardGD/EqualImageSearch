@@ -7,11 +7,11 @@
 #include <string_view>
 #include <stdexcept>
 
-#include "opencv/build/include/opencv.hpp"
-#include "opencv/build/include/opencv2/features2d.hpp"
-#include "opencv/build/include/opencv2/highgui.hpp"
-#include "opencv/build/include/opencv2/imgproc.hpp"
-#include "opencv/build/include/opencv2/calib3d.hpp"
+#include "opencv-5.0.0/build/install/include/opencv2/opencv.hpp"
+#include "opencv-5.0.0/build/install/include/opencv2/features2d.hpp"
+#include "opencv-5.0.0/build/install/include/opencv2/highgui.hpp"
+#include "opencv-5.0.0/build/install/include/opencv2/imgproc.hpp"
+#include "opencv-5.0.0/build/install/include/opencv2/calib3d.hpp"
 
 namespace fs = std::filesystem;
 
@@ -444,11 +444,11 @@ int main(int argc, char* argv[]) {
         // Сравниваем изображения и группируем похожие
         iterateAndCompareImages(processedImages, similarImagesGroups, histCoeff, eqCoeff, showPairs == extendedBool::trueValue);
         if (pairsOutput == OutputMode::file || pairsOutput == OutputMode::both) {
-            std::ofstream outFile(outputFile);
             fs::path parentDir = outputFile.parent_path();
-            
             // Создаём папки, если их нет
             if (!parentDir.empty() && !fs::exists(parentDir)) fs::create_directories(parentDir);
+            
+            std::ofstream outFile(outputFile);
             if (!outFile.is_open()) std::cerr << "Ошибка: Не удалось открыть файл для записи результатов." << std::endl;
             else {
                 for (const auto& group : similarImagesGroups) {

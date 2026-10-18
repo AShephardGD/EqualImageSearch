@@ -7,9 +7,6 @@ project(EqualImageSearch)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-# Укажите путь к OpenCV
-set(OpenCV_DIR "${CMAKE_SOURCE_DIR}/opencv/build") # Путь к папке build OpenCV
-
 # Найдите OpenCV
 find_package(OpenCV REQUIRED)
 
@@ -17,7 +14,7 @@ find_package(OpenCV REQUIRED)
 add_executable(equalImageSearch equalImageSearch.cpp)
 
 # Укажите директории для заголовочных файлов OpenCV
-include_directories(${OpenCV_INCLUDE_DIRS} "${CMAKE_SOURCE_DIR}/opencv/build/include")
+include_directories(${OpenCV_INCLUDE_DIRS})
 
 # Подключите библиотеки OpenCV
-target_link_libraries(equalImageSearch ${OpenCV_LIBS})
+target_link_libraries(equalImageSearch ${OpenCV_LIBS} stdc++fs)

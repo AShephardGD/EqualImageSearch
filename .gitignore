@@ -1,6 +1,4 @@
 /build
-/Release
-/opencv
-/test.jpg
+/release
 /.vscode
-/output
+/opencv-5.0.0
